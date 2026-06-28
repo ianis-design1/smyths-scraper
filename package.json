@@ -1,6 +1,6 @@
 {
   "name": "smyths-playwright-service",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "private": true,
   "scripts": {
     "start": "node index.js",
@@ -8,7 +8,6 @@
   },
   "dependencies": {
     "express": "^4.18.2",
-    "playwright-core": "^1.40.0",
-    "@sparticuz/chromium": "^112.0.0"
+    "playwright": "^1.40.0"
   }
 }
