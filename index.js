@@ -105,8 +105,12 @@ async function scrape(page) {
   let price = '';
   try {
     price = await page.evaluate(() => {
-      const el = document.querySelector('[class*="price"]') || document.querySelector('[class*="Price"]') || document.querySelector('[data-price]') || document.querySelector('[data-testid*="price"]') || document.querySelector('[itemprop="price"]');
-      return el ? (el.getAttribute('content') || el.getAttribute('data-price') || el.textContent.trim()) : '';
+      const el = document.querySelector('[class*="price"]') || document.querySelector('[class*="Price"]') || document.querySelector('[data-price]') || document.querySelector('[data-testid*="price"]') || document.querySelector('[itemprop="price"]') || document.querySelector('[class*="sales-price"]') || document.querySelector('[class*="offer-price"]') || document.querySelector('[data-product-price]') || document.querySelector('[data-testid*="product-price"]') || document.querySelector('.pdp__price') || document.querySelector('[class*="pdp-price"]');
+      if (el) {
+        return el.getAttribute('content') || el.getAttribute('data-price') || el.getAttribute('data-value') || el.textContent.trim();
+      }
+      const meta = document.querySelector('meta[property="product:price:amount"]');
+      return meta ? meta.getAttribute('content') || '' : '';
     });
   } catch {}
   if (!price) {
@@ -120,19 +124,46 @@ async function scrape(page) {
 
   const bodyText = await page.evaluate(() => document.body.innerText.toLowerCase()).catch(() => '');
   let stock = 'Unknown';
-  for (const p of ['out of stock', 'sold out', 'unavailable', 'temporarily out of stock', 'currently unavailable']) {
-    if (bodyText.includes(p)) { stock = 'Out of Stock'; break; }
+
+  // Check for stock elements directly
+  try {
+    const stockEl = await page.evaluate(() => {
+      const el = document.querySelector('[class*="stock"]') || document.querySelector('[class*="availability"]') || document.querySelector('[data-testid*="stock"]') || document.querySelector('[class*="product-stock"]');
+      return el ? el.textContent.trim().toLowerCase() : '';
+    });
+    if (stockEl) {
+      if (stockEl.includes('out of stock') || stockEl.includes('sold out') || stockEl.includes('unavailable')) {
+        stock = 'Out of Stock';
+      } else if (stockEl.includes('in stock') || stockEl.includes('available')) {
+        stock = 'In Stock';
+      }
+    }
+  } catch {}
+
+  if (stock === 'Unknown') {
+    for (const p of ['out of stock', 'sold out', 'unavailable', 'temporarily out of stock', 'currently unavailable', 'notify me when in stock']) {
+      if (bodyText.includes(p)) { stock = 'Out of Stock'; break; }
+    }
   }
   if (stock === 'Unknown') {
-    for (const p of ['in stock', 'add to basket', 'add to bag', 'buy now', 'add to trolley']) {
+    for (const p of ['in stock', 'add to basket', 'add to bag', 'buy now', 'add to trolley', 'add to basket', 'available to buy']) {
       if (bodyText.includes(p)) { stock = 'In Stock'; break; }
     }
   }
 
-  const id = await page.evaluate(() => window.location.pathname.match(/\/p\/(\d+)/)?.[1] || null).catch(() => null);
+  const id = await page.evaluate(() => {
+    const m = window.location.pathname.match(/\/p\/(\d+)/);
+    if (m) return m[1];
+    const body = document.body.innerText;
+    const idMatch = body.match(/product\s*(?:id|code|number)[:\s]*(\d{5,})/i);
+    return idMatch ? idMatch[1] : null;
+  }).catch(() => null);
+
   const img = await page.evaluate(() => {
-    const m = document.querySelector('meta[property="og:image"]');
-    return m ? m.getAttribute('content') || '' : '';
+    const og = document.querySelector('meta[property="og:image"]');
+    if (og) return og.getAttribute('content') || '';
+    const img = document.querySelector('[class*="product-image"] img, [class*="pdp-image"] img, [class*="gallery"] img, [data-testid*="image"] img');
+    return img ? img.getAttribute('src') || '' : '';
   }).catch(() => '');
 
   return { name, price, stock, id, img };
@@ -158,46 +189,66 @@ async function runSession(url, withStores) {
       page.setDefaultTimeout(45000);
       page.setDefaultNavigationTimeout(45000);
 
-      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45000 });
-      await page.waitForTimeout(2000);
+      await page.goto(url, { waitUntil: 'networkidle', timeout: 60000 });
+      await page.waitForTimeout(3000);
       await dismissPopups(page);
 
       const product = await scrape(page);
 
       let stores = [];
       if (withStores) {
-        const clicked = await page.evaluate(() => {
-          const sels = ['button:has-text("Select Store")', 'a:has-text("Select Store")', '[data-testid*="store"] button', '[class*="store-cta"]', 'button:has-text("Check stock")', 'button:has-text("Store stock")'];
-          for (const sel of sels) {
-            const el = document.querySelector(sel);
-            if (el) { el.click(); return true; }
-          }
-          return false;
-        });
+        try {
+          const storeBtnSelectors = [
+            page.locator('button', { hasText: 'Select Store' }).first(),
+            page.locator('a', { hasText: 'Select Store' }).first(),
+            page.locator('[data-testid*="store"] button').first(),
+            page.locator('[class*="store-cta"]').first(),
+            page.locator('button', { hasText: 'Check stock' }).first(),
+            page.locator('button', { hasText: 'Store stock' }).first(),
+          ];
 
-        if (clicked) {
-          await page.waitForTimeout(2000);
-          await page.evaluate(() => {
-            const toggles = ['button:has-text("Only show stores")', 'label:has-text("Only show stores")', 'input[type="checkbox"][class*="stock"]', '[class*="stock-toggle"]', 'button:has-text("Available stores")'];
-            for (const sel of toggles) {
-              const el = document.querySelector(sel);
-              if (el) { el.click(); return; }
+          let clicked = false;
+          for (const btn of storeBtnSelectors) {
+            if (await btn.isVisible().catch(() => false)) {
+              await btn.click().catch(() => {});
+              clicked = true;
+              break;
             }
-          });
-          await page.waitForTimeout(1500);
+          }
 
-          await page.waitForSelector('[class*="store-item"], [class*="storeItem"], [class*="store-result"], [class*="StoreLine"], [class*="store-card"]', { timeout: 8000 }).catch(() => {});
+          if (clicked) {
+            await page.waitForTimeout(2000);
 
-          stores = await page.evaluate(() => {
-            const items = document.querySelectorAll('[class*="store-item"], [class*="storeItem"], [class*="store-result"], [class*="StoreLine"], [class*="store-card"], [class*="store-entry"]');
-            return Array.from(items).map(el => {
-              const n = el.querySelector('[class*="name"]') || el.querySelector('[class*="Name"]') || el.querySelector('[class*="title"]') || el.querySelector('h3, h4, strong');
-              const s = el.querySelector('[class*="stock"]') || el.querySelector('[class*="Stock"]') || el.querySelector('[class*="availability"]');
-              const name = n ? n.textContent.trim() : '';
-              const stock = s ? s.textContent.trim() : '';
-              return { storeName: name, stockText: stock, isInStock: stock.length > 0 && !stock.toLowerCase().includes('out of stock') && !stock.toLowerCase().includes('unavailable') };
-            }).filter(x => x.storeName);
-          });
+            const toggleSelectors = [
+              page.locator('button', { hasText: 'Only show stores' }).first(),
+              page.locator('label', { hasText: 'Only show stores' }).first(),
+              page.locator('input[type="checkbox"][class*="stock"]').first(),
+              page.locator('[class*="stock-toggle"]').first(),
+              page.locator('button', { hasText: 'Available stores' }).first(),
+            ];
+            for (const toggle of toggleSelectors) {
+              if (await toggle.isVisible().catch(() => false)) {
+                await toggle.click().catch(() => {});
+                break;
+              }
+            }
+            await page.waitForTimeout(1500);
+
+            await page.waitForSelector('[class*="store-item"], [class*="storeItem"], [class*="store-result"], [class*="StoreLine"], [class*="store-card"]', { timeout: 8000 }).catch(() => {});
+
+            stores = await page.evaluate(() => {
+              const items = document.querySelectorAll('[class*="store-item"], [class*="storeItem"], [class*="store-result"], [class*="StoreLine"], [class*="store-card"], [class*="store-entry"]');
+              return Array.from(items).map(el => {
+                const n = el.querySelector('[class*="name"]') || el.querySelector('[class*="Name"]') || el.querySelector('[class*="title"]') || el.querySelector('h3, h4, strong');
+                const s = el.querySelector('[class*="stock"]') || el.querySelector('[class*="Stock"]') || el.querySelector('[class*="availability"]');
+                const name = n ? n.textContent.trim() : '';
+                const stock = s ? s.textContent.trim() : '';
+                return { storeName: name, stockText: stock, isInStock: stock.length > 0 && !stock.toLowerCase().includes('out of stock') && !stock.toLowerCase().includes('unavailable') };
+              }).filter(x => x.storeName);
+            });
+          }
+        } catch (e) {
+          console.error('Store scraping failed (non-fatal):', e.message);
         }
       }
 
