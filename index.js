@@ -194,8 +194,12 @@ async function runSession(url, withStores) {
 
       const pageTitle = await page.title().catch(() => 'N/A');
       const pageUrl = page.url();
+      const bodySnippet = await page.evaluate(() => document.body?.innerText?.substring(0, 500) || 'NO BODY').catch(() => 'EVAL ERROR');
+      const htmlSnippet = await page.evaluate(() => document.documentElement?.outerHTML?.substring(0, 1000) || 'NO HTML').catch(() => 'EVAL ERROR');
       console.log(`Page title: "${pageTitle}", URL: ${pageUrl}`);
-      if (pageTitle.includes('Incapsula') || pageTitle.includes('Challenge') || pageUrl.includes('Incapsula')) {
+      console.log(`Body text (first 500): ${bodySnippet.substring(0, 300)}`);
+      console.log(`HTML (first 1000): ${htmlSnippet.substring(0, 300)}`);
+      if (pageTitle.includes('Incapsula') || pageTitle.includes('Challenge') || pageUrl.includes('Incapsula') || bodySnippet.includes('Incapsula') || htmlSnippet.includes('Incapsula')) {
         console.log('Blocked by Incapsula — retrying with stealth...');
         throw new Error('Incapsula challenge page detected');
       }
