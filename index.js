@@ -191,6 +191,15 @@ async function runSession(url, withStores) {
 
       await page.goto(url, { waitUntil: 'networkidle', timeout: 60000 });
       await page.waitForTimeout(3000);
+
+      const pageTitle = await page.title().catch(() => 'N/A');
+      const pageUrl = page.url();
+      console.log(`Page title: "${pageTitle}", URL: ${pageUrl}`);
+      if (pageTitle.includes('Incapsula') || pageTitle.includes('Challenge') || pageUrl.includes('Incapsula')) {
+        console.log('Blocked by Incapsula — retrying with stealth...');
+        throw new Error('Incapsula challenge page detected');
+      }
+
       await dismissPopups(page);
 
       const product = await scrape(page);
