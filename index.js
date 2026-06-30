@@ -187,23 +187,28 @@ async function runSession(url, withStores) {
       await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36');
       await page.setViewport({ width: 1920, height: 1080 });
       await page.evaluateOnNewDocument(STEALTH_SCRIPT);
-      page.setDefaultTimeout(45000);
+      page.setDefaultTimeout(90000);
 
-      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
+      // Navigate via Google referrer to bypass Incapsula (like botasaurus)
+      await page.goto('https://www.google.com/', { waitUntil: 'domcontentloaded', timeout: 30000 });
+      await sleep(1000);
+      await page.goto(url, { referer: 'https://www.google.com/', waitUntil: 'domcontentloaded', timeout: 60000 });
+      await sleep(2000);
 
-      // Wait for Incapsula challenge to complete and real page to load
-      for (let w = 0; w < 20; w++) {
+      // Wait for real page content to load
+      let loaded = false;
+      for (let w = 0; w < 25; w++) {
         await sleep(2000);
         const title = await page.title().catch(() => '');
-        const hasBody = await page.evaluate(() => !!document.body && document.body.innerText.length > 50).catch(() => false);
-        if (title && hasBody) break;
+        const hasBody = await page.evaluate(() => !!document.body && document.body.innerText.length > 100).catch(() => false);
+        if (title && hasBody) { loaded = true; break; }
       }
 
       const pageTitle = await page.title().catch(() => '');
       const bodyPreview = await page.evaluate(() => document.body?.innerText?.substring(0, 500) || '').catch(() => '');
       console.log(`Title: "${pageTitle}", bodyLen: ${bodyPreview.length}`);
 
-      if (!pageTitle && !bodyPreview) {
+      if (!loaded) {
         throw new Error('Page did not load - likely blocked by WAF');
       }
 
