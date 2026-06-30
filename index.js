@@ -11,6 +11,8 @@ const API_KEY = process.env.API_KEY || 'change-this-secret-key';
 let browser = null;
 let browserLock = null;
 
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
 const STEALTH_SCRIPT = `
 Object.defineProperty(navigator, 'webdriver', { get: () => false });
 Object.defineProperty(navigator, 'plugins', {
@@ -188,7 +190,7 @@ async function runSession(url, withStores) {
       page.setDefaultTimeout(45000);
 
       await page.goto(url, { waitUntil: 'networkidle2', timeout: 60000 });
-      await page.waitForTimeout(3000);
+      await sleep(3000);
 
       const pageTitle = await page.title().catch(() => '');
       const pageUrl = page.url();
@@ -229,7 +231,7 @@ async function runSession(url, withStores) {
           }
 
           if (clicked) {
-            await page.waitForTimeout(2000);
+            await sleep(2000);
             const toggleConfigs = [
               { sel: 'button', text: 'Only show stores' },
               { sel: 'label', text: 'Only show stores' },
@@ -245,7 +247,7 @@ async function runSession(url, withStores) {
                 if (el) { await el.click().catch(() => {}); break; }
               }
             }
-            await page.waitForTimeout(1500);
+            await sleep(1500);
 
             await page.waitForSelector('[class*="store-item"], [class*="storeItem"], [class*="store-result"], [class*="StoreLine"], [class*="store-card"]', { timeout: 8000 }).catch(() => {});
 
