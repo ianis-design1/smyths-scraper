@@ -366,6 +366,33 @@ app.post('/api/store-stock', requireAuth, async (req, res) => {
   }
 });
 
+app.post('/api/debug', requireAuth, async (req, res) => {
+  const { url } = req.body;
+  let context = null;
+  let page = null;
+  try {
+    const b = await getBrowser();
+    context = await b.newContext({
+      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/130.0.0.0 Safari/537.36',
+      viewport: { width: 1920, height: 1080 },
+      locale: 'en-GB',
+    });
+    page = await context.newPage();
+    await page.addInitScript(STEALTH_SCRIPT);
+    await page.goto(url, { waitUntil: 'networkidle', timeout: 60000 }).catch(() => {});
+    await page.waitForTimeout(3000);
+    const title = await page.title().catch(() => '');
+    const bodyText = await page.evaluate(() => document.body?.innerText?.substring(0, 3000) || 'NO BODY').catch(() => 'EVAL ERROR');
+    const html = await page.evaluate(() => document.documentElement?.outerHTML?.substring(0, 3000) || 'NO HTML').catch(() => 'EVAL ERROR');
+    res.json({ title, bodyText, htmlSnippet: html.substring(0, 2000) });
+  } catch (e) {
+    res.json({ error: e.message });
+  } finally {
+    if (page) await page.close().catch(() => {});
+    if (context) await context.close().catch(() => {});
+  }
+});
+
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', browser: !!browser });
 });
