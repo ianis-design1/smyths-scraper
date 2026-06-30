@@ -198,6 +198,10 @@ async function runSession(url, withStores) {
         throw new Error('Blocked by Incapsula challenge page');
       }
 
+      console.log(`Title: "${pageTitle}"`);
+      const bodyPreview = await page.evaluate(() => document.body?.innerText?.substring(0, 2000) || 'NO BODY').catch(() => 'ERR');
+      console.log(`Body: ${bodyPreview.substring(0, 500)}`);
+
       await dismissPopups(page);
 
       const product = await scrape(page);
