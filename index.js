@@ -189,18 +189,23 @@ async function runSession(url, withStores) {
       await page.evaluateOnNewDocument(STEALTH_SCRIPT);
       page.setDefaultTimeout(45000);
 
-      await page.goto(url, { waitUntil: 'networkidle2', timeout: 60000 });
-      await sleep(3000);
+      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
 
-      const pageTitle = await page.title().catch(() => '');
-      const pageUrl = page.url();
-      if (pageUrl.includes('Incapsula') || pageTitle.includes('Incapsula') || pageTitle.includes('Challenge')) {
-        throw new Error('Blocked by Incapsula challenge page');
+      // Wait for Incapsula challenge to complete and real page to load
+      for (let w = 0; w < 20; w++) {
+        await sleep(2000);
+        const title = await page.title().catch(() => '');
+        const hasBody = await page.evaluate(() => !!document.body && document.body.innerText.length > 50).catch(() => false);
+        if (title && hasBody) break;
       }
 
-      console.log(`Title: "${pageTitle}"`);
-      const bodyPreview = await page.evaluate(() => document.body?.innerText?.substring(0, 2000) || 'NO BODY').catch(() => 'ERR');
-      console.log(`Body: ${bodyPreview.substring(0, 500)}`);
+      const pageTitle = await page.title().catch(() => '');
+      const bodyPreview = await page.evaluate(() => document.body?.innerText?.substring(0, 500) || '').catch(() => '');
+      console.log(`Title: "${pageTitle}", bodyLen: ${bodyPreview.length}`);
+
+      if (!pageTitle && !bodyPreview) {
+        throw new Error('Page did not load - likely blocked by WAF');
+      }
 
       await dismissPopups(page);
 
