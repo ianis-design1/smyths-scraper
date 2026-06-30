@@ -161,7 +161,7 @@ async function clickByText(page, tag, text) {
 
 // --- Run a scraping session ---
 async function runSession(url, withStores) {
-  const maxTries = 2;
+  const maxTries = 1;
   let lastErr;
 
   for (let i = 0; i <= maxTries; i++) {
@@ -185,10 +185,10 @@ async function runSession(url, withStores) {
       await sleep(1500);
       await page.goto(url, { referer: 'https://www.google.com/', waitUntil: 'domcontentloaded', timeout: 60000 });
 
-      // Wait for real content
+      // Wait for real content (shorter timeout so Vercel fallback kicks in)
       let hasContent = false;
-      for (let w = 0; w < 30; w++) {
-        await sleep(2000);
+      for (let w = 0; w < 10; w++) {
+        await sleep(1500);
         const has = await page.evaluate(() => {
           const h1 = document.querySelector('h1');
           return h1 && h1.textContent.trim().length > 3;
