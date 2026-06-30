@@ -17,6 +17,52 @@ let browser = null;
 let browserLock = null;
 let launching = false;
 
+const STEALTH_SCRIPT = `
+// Override navigator.webdriver
+Object.defineProperty(navigator, 'webdriver', { get: () => false });
+
+// Override navigator.plugins
+Object.defineProperty(navigator, 'plugins', {
+  get: () => [1, 2, 3, 4, 5].map(() => ({ name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer' })),
+});
+
+// Override navigator.languages
+Object.defineProperty(navigator, 'languages', { get: () => ['en-GB', 'en-US', 'en'] });
+
+// Override navigator.platform
+Object.defineProperty(navigator, 'platform', { get: () => 'Win32' });
+
+// Override navigator.hardwareConcurrency
+Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8 });
+
+// Override navigator.deviceMemory
+Object.defineProperty(navigator, 'deviceMemory', { get: () => 8 });
+
+// Override chrome.runtime
+window.chrome = window.chrome || {};
+window.chrome.runtime = window.chrome.runtime || {};
+
+// Add missing chrome properties
+['loadTimes', 'csi', 'app'].forEach(prop => {
+  if (!window.chrome[prop]) window.chrome[prop] = {};
+});
+
+// Override permissions
+if (navigator.permissions && navigator.permissions.query) {
+  const origQuery = navigator.permissions.query.bind(navigator.permissions);
+  navigator.permissions.query = (desc) => {
+    if (desc.name === 'notifications') return Promise.resolve({ state: 'granted', onchange: null });
+    if (desc.name === 'clipboard-read') return Promise.resolve({ state: 'granted', onchange: null });
+    return origQuery(desc);
+  };
+}
+
+// Override webdriver remove function
+if (window.navigator.webdriver === undefined) {
+  delete window.navigator.__proto__.webdriver;
+}
+`;
+
 async function launchBrowser() {
   if (!chromium) throw new Error('Playwright not available');
 
@@ -29,11 +75,19 @@ async function launchBrowser() {
       '--disable-gpu',
       '--single-process',
       '--no-zygote',
+      '--headless=new',
       '--disable-blink-features=AutomationControlled',
       '--disable-background-networking',
       '--disable-breakpad',
       '--disable-sync',
       '--window-size=1920,1080',
+      '--no-first-run',
+      '--no-default-browser-check',
+      '--disable-features=IsolateOrigins,site-per-process',
+      '--disable-session-crashed-bubble',
+      '--disable-search-engine-choice-screen',
+      '--password-store=basic',
+      '--remote-allow-origins=*',
     ],
     timeout: 30000,
   });
@@ -180,28 +234,26 @@ async function runSession(url, withStores) {
     try {
       const b = await getBrowser();
       context = await b.newContext({
-        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/125.0.0.0 Safari/537.36',
+        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
         viewport: { width: 1920, height: 1080 },
         locale: 'en-GB',
+        timezoneId: 'Europe/London',
         ignoreHTTPSErrors: true,
+        reducedMotion: 'no-preference',
+        colorScheme: 'light',
       });
       page = await context.newPage();
+      await page.addInitScript(STEALTH_SCRIPT);
       page.setDefaultTimeout(45000);
       page.setDefaultNavigationTimeout(45000);
 
       await page.goto(url, { waitUntil: 'networkidle', timeout: 60000 });
       await page.waitForTimeout(3000);
 
-      const pageTitle = await page.title().catch(() => 'N/A');
+      const pageTitle = await page.title().catch(() => '');
       const pageUrl = page.url();
-      const bodySnippet = await page.evaluate(() => document.body?.innerText?.substring(0, 500) || 'NO BODY').catch(() => 'EVAL ERROR');
-      const htmlSnippet = await page.evaluate(() => document.documentElement?.outerHTML?.substring(0, 1000) || 'NO HTML').catch(() => 'EVAL ERROR');
-      console.log(`Page title: "${pageTitle}", URL: ${pageUrl}`);
-      console.log(`Body text (first 500): ${bodySnippet.substring(0, 300)}`);
-      console.log(`HTML (first 1000): ${htmlSnippet.substring(0, 300)}`);
-      if (pageTitle.includes('Incapsula') || pageTitle.includes('Challenge') || pageUrl.includes('Incapsula') || bodySnippet.includes('Incapsula') || htmlSnippet.includes('Incapsula')) {
-        console.log('Blocked by Incapsula — retrying with stealth...');
-        throw new Error('Incapsula challenge page detected');
+      if (pageUrl.includes('Incapsula') || pageTitle.includes('Incapsula') || pageTitle.includes('Challenge')) {
+        throw new Error('Blocked by Incapsula challenge page');
       }
 
       await dismissPopups(page);
