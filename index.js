@@ -1,10 +1,5 @@
 const express = require('express');
-let chromium;
-try {
-  chromium = require('playwright').chromium;
-} catch {
-  console.error('Playwright not installed');
-}
+const puppeteer = require('puppeteer');
 
 const app = express();
 app.use(express.json({ limit: '1mb' }));
@@ -15,58 +10,30 @@ const API_KEY = process.env.API_KEY || 'change-this-secret-key';
 // --- Browser management ---
 let browser = null;
 let browserLock = null;
-let launching = false;
 
 const STEALTH_SCRIPT = `
-// Override navigator.webdriver
 Object.defineProperty(navigator, 'webdriver', { get: () => false });
-
-// Override navigator.plugins
 Object.defineProperty(navigator, 'plugins', {
   get: () => [1, 2, 3, 4, 5].map(() => ({ name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer' })),
 });
-
-// Override navigator.languages
 Object.defineProperty(navigator, 'languages', { get: () => ['en-GB', 'en-US', 'en'] });
-
-// Override navigator.platform
 Object.defineProperty(navigator, 'platform', { get: () => 'Win32' });
-
-// Override navigator.hardwareConcurrency
 Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8 });
-
-// Override navigator.deviceMemory
 Object.defineProperty(navigator, 'deviceMemory', { get: () => 8 });
-
-// Override chrome.runtime
 window.chrome = window.chrome || {};
 window.chrome.runtime = window.chrome.runtime || {};
-
-// Add missing chrome properties
-['loadTimes', 'csi', 'app'].forEach(prop => {
-  if (!window.chrome[prop]) window.chrome[prop] = {};
-});
-
-// Override permissions
+['loadTimes', 'csi', 'app'].forEach(p => { if (!window.chrome[p]) window.chrome[p] = {}; });
 if (navigator.permissions && navigator.permissions.query) {
-  const origQuery = navigator.permissions.query.bind(navigator.permissions);
-  navigator.permissions.query = (desc) => {
-    if (desc.name === 'notifications') return Promise.resolve({ state: 'granted', onchange: null });
-    if (desc.name === 'clipboard-read') return Promise.resolve({ state: 'granted', onchange: null });
-    return origQuery(desc);
+  const orig = navigator.permissions.query.bind(navigator.permissions);
+  navigator.permissions.query = (d) => {
+    if (d.name === 'notifications' || d.name === 'clipboard-read') return Promise.resolve({ state: 'granted', onchange: null });
+    return orig(d);
   };
-}
-
-// Override webdriver remove function
-if (window.navigator.webdriver === undefined) {
-  delete window.navigator.__proto__.webdriver;
 }
 `;
 
 async function launchBrowser() {
-  if (!chromium) throw new Error('Playwright not available');
-
-  return chromium.launch({
+  return puppeteer.launch({
     headless: true,
     args: [
       '--no-sandbox',
@@ -75,7 +42,6 @@ async function launchBrowser() {
       '--disable-gpu',
       '--single-process',
       '--no-zygote',
-      '--headless=new',
       '--disable-blink-features=AutomationControlled',
       '--disable-background-networking',
       '--disable-breakpad',
@@ -87,35 +53,24 @@ async function launchBrowser() {
       '--disable-session-crashed-bubble',
       '--disable-search-engine-choice-screen',
       '--password-store=basic',
-      '--remote-allow-origins=*',
     ],
-    timeout: 30000,
   });
 }
 
 async function getBrowser() {
-  // Wait for any in-progress lock
   while (browserLock) await browserLock;
-
-  // Already running
   if (browser) {
-    try {
-      const ok = await browser.isConnected();
-      if (ok) return browser;
-    } catch {}
+    try { if (browser.connected) return browser; } catch {}
     browser = null;
   }
-
-  // Launch (one at a time)
   let resolveLock;
   browserLock = new Promise(r => resolveLock = r);
-
   try {
     browser = await launchBrowser();
     return browser;
   } finally {
     browserLock = null;
-    resolveLock();
+    if (resolveLock) resolveLock();
   }
 }
 
@@ -134,19 +89,15 @@ function requireAuth(req, res, next) {
 
 // --- Popup dismissal ---
 async function dismissPopups(page) {
-  await page.waitForTimeout(2000);
-  try {
-    await page.evaluate(() => {
-      const btns = document.querySelectorAll('button, a[role="button"], [onclick]');
-      for (const btn of btns) {
-        const t = (btn.textContent || '').toLowerCase().trim();
-        if ((t.includes('accept') || t.includes('agree') || t.includes('allow') || t.includes('got it') || t.includes('ok') || t.includes('yes') || t.includes('continue') || t.includes('close') || t.includes('no thanks')) && btn.offsetParent !== null) {
-          btn.click(); break;
-        }
+  await page.evaluate(() => {
+    const btns = document.querySelectorAll('button, a[role="button"], [onclick]');
+    for (const btn of btns) {
+      const t = (btn.textContent || '').toLowerCase().trim();
+      if ((t.includes('accept') || t.includes('agree') || t.includes('allow') || t.includes('got it') || t.includes('ok') || t.includes('yes') || t.includes('continue') || t.includes('close') || t.includes('no thanks')) && btn.offsetParent !== null) {
+        btn.click(); break;
       }
-    });
-    await page.waitForTimeout(500);
-  } catch {}
+    }
+  }).catch(() => {});
 }
 
 // --- Scrape ---
@@ -179,7 +130,6 @@ async function scrape(page) {
   const bodyText = await page.evaluate(() => document.body.innerText.toLowerCase()).catch(() => '');
   let stock = 'Unknown';
 
-  // Check for stock elements directly
   try {
     const stockEl = await page.evaluate(() => {
       const el = document.querySelector('[class*="stock"]') || document.querySelector('[class*="availability"]') || document.querySelector('[data-testid*="stock"]') || document.querySelector('[class*="product-stock"]');
@@ -208,8 +158,7 @@ async function scrape(page) {
   const id = await page.evaluate(() => {
     const m = window.location.pathname.match(/\/p\/(\d+)/);
     if (m) return m[1];
-    const body = document.body.innerText;
-    const idMatch = body.match(/product\s*(?:id|code|number)[:\s]*(\d{5,})/i);
+    const idMatch = document.body.innerText.match(/product\s*(?:id|code|number)[:\s]*(\d{5,})/i);
     return idMatch ? idMatch[1] : null;
   }).catch(() => null);
 
@@ -229,25 +178,16 @@ async function runSession(url, withStores) {
   let lastErr;
 
   for (let i = 0; i <= maxTries; i++) {
-    let context = null;
     let page = null;
     try {
       const b = await getBrowser();
-      context = await b.newContext({
-        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
-        viewport: { width: 1920, height: 1080 },
-        locale: 'en-GB',
-        timezoneId: 'Europe/London',
-        ignoreHTTPSErrors: true,
-        reducedMotion: 'no-preference',
-        colorScheme: 'light',
-      });
-      page = await context.newPage();
-      await page.addInitScript(STEALTH_SCRIPT);
+      page = await b.newPage();
+      await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36');
+      await page.setViewport({ width: 1920, height: 1080 });
+      await page.evaluateOnNewDocument(STEALTH_SCRIPT);
       page.setDefaultTimeout(45000);
-      page.setDefaultNavigationTimeout(45000);
 
-      await page.goto(url, { waitUntil: 'networkidle', timeout: 60000 });
+      await page.goto(url, { waitUntil: 'networkidle2', timeout: 60000 });
       await page.waitForTimeout(3000);
 
       const pageTitle = await page.title().catch(() => '');
@@ -263,38 +203,46 @@ async function runSession(url, withStores) {
       let stores = [];
       if (withStores) {
         try {
-          const storeBtnSelectors = [
-            page.locator('button', { hasText: 'Select Store' }).first(),
-            page.locator('a', { hasText: 'Select Store' }).first(),
-            page.locator('[data-testid*="store"] button').first(),
-            page.locator('[class*="store-cta"]').first(),
-            page.locator('button', { hasText: 'Check stock' }).first(),
-            page.locator('button', { hasText: 'Store stock' }).first(),
-          ];
+          async function clickByText(selectors, texts) {
+            for (let i = 0; i < selectors.length; i++) {
+              const found = await page.evaluate((sel, txt) => {
+                const items = document.querySelectorAll(sel);
+                for (const item of items) {
+                  if (item.textContent.toLowerCase().includes(txt.toLowerCase())) {
+                    item.click();
+                    return true;
+                  }
+                }
+                return false;
+              }, selectors[i], texts[i]).catch(() => false);
+              if (found) return true;
+            }
+            return false;
+          }
 
           let clicked = false;
-          for (const btn of storeBtnSelectors) {
-            if (await btn.isVisible().catch(() => false)) {
-              await btn.click().catch(() => {});
-              clicked = true;
-              break;
-            }
+          const storeButtons = { selectors: ['button', 'a', '[data-testid*="store"] button', '[class*="store-cta"]'], texts: ['Select Store', 'Select Store', 'Select Store', 'Select Store'] };
+          if (await clickByText(storeButtons.selectors, storeButtons.texts)) clicked = true;
+          if (!clicked) {
+            const stockButtons = { selectors: ['button', 'button'], texts: ['Check stock', 'Store stock'] };
+            if (await clickByText(stockButtons.selectors, stockButtons.texts)) clicked = true;
           }
 
           if (clicked) {
             await page.waitForTimeout(2000);
-
-            const toggleSelectors = [
-              page.locator('button', { hasText: 'Only show stores' }).first(),
-              page.locator('label', { hasText: 'Only show stores' }).first(),
-              page.locator('input[type="checkbox"][class*="stock"]').first(),
-              page.locator('[class*="stock-toggle"]').first(),
-              page.locator('button', { hasText: 'Available stores' }).first(),
+            const toggleConfigs = [
+              { sel: 'button', text: 'Only show stores' },
+              { sel: 'label', text: 'Only show stores' },
+              { sel: 'input[type="checkbox"][class*="stock"]', text: '' },
+              { sel: '[class*="stock-toggle"]', text: '' },
+              { sel: 'button', text: 'Available stores' },
             ];
-            for (const toggle of toggleSelectors) {
-              if (await toggle.isVisible().catch(() => false)) {
-                await toggle.click().catch(() => {});
-                break;
+            for (const cfg of toggleConfigs) {
+              if (cfg.text) {
+                if (await clickByText([cfg.sel], [cfg.text])) break;
+              } else {
+                const el = await page.$(cfg.sel).catch(() => null);
+                if (el) { await el.click().catch(() => {}); break; }
               }
             }
             await page.waitForTimeout(1500);
@@ -333,7 +281,6 @@ async function runSession(url, withStores) {
       if (i < maxTries) await new Promise(r => setTimeout(r, 2000));
     } finally {
       if (page) await page.close().catch(() => {});
-      if (context) await context.close().catch(() => {});
     }
   }
   throw lastErr || new Error('Scrape failed');
@@ -363,33 +310,6 @@ app.post('/api/store-stock', requireAuth, async (req, res) => {
     res.json({ success: true, product: data.product, stores: data.stores });
   } catch (e) {
     res.status(500).json({ success: false, error: e.message || 'Scrape error', stores: [], product: null });
-  }
-});
-
-app.post('/api/debug', requireAuth, async (req, res) => {
-  const { url } = req.body;
-  let context = null;
-  let page = null;
-  try {
-    const b = await getBrowser();
-    context = await b.newContext({
-      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/130.0.0.0 Safari/537.36',
-      viewport: { width: 1920, height: 1080 },
-      locale: 'en-GB',
-    });
-    page = await context.newPage();
-    await page.addInitScript(STEALTH_SCRIPT);
-    await page.goto(url, { waitUntil: 'networkidle', timeout: 60000 }).catch(() => {});
-    await page.waitForTimeout(3000);
-    const title = await page.title().catch(() => '');
-    const bodyText = await page.evaluate(() => document.body?.innerText?.substring(0, 3000) || 'NO BODY').catch(() => 'EVAL ERROR');
-    const html = await page.evaluate(() => document.documentElement?.outerHTML?.substring(0, 3000) || 'NO HTML').catch(() => 'EVAL ERROR');
-    res.json({ title, bodyText, htmlSnippet: html.substring(0, 2000) });
-  } catch (e) {
-    res.json({ error: e.message });
-  } finally {
-    if (page) await page.close().catch(() => {});
-    if (context) await context.close().catch(() => {});
   }
 });
 

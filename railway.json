@@ -1,7 +1,6 @@
 {
   "build": {
-    "builder": "NIXPACKS",
-    "buildCommand": "npx playwright install --with-deps chromium"
+    "builder": "DOCKERFILE"
   },
   "deploy": {
     "startCommand": "node index.js",

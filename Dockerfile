@@ -1,6 +1,6 @@
 FROM node:20-slim
 
-# Install Playwright Chromium system dependencies
+# Install Chrome system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     fonts-liberation \
@@ -36,12 +36,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Install Node deps
 COPY package.json .
 RUN npm install
-
-# Install Playwright Chromium binary
-RUN npx playwright install chromium
 
 COPY . .
 
